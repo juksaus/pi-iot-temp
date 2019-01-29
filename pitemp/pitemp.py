@@ -1,12 +1,12 @@
+import argparse
 import datetime
 import json
 import uuid
-
-from w1thermsensor import W1ThermSensor
 from time import sleep, time
+
 import jwt
 import paho.mqtt.client as mqtt
-import argparse
+from w1thermsensor import W1ThermSensor
 
 # Token life in minutes
 token_life = 60
@@ -27,11 +27,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_jwt(cur_time, projectID, private_key_path):
+def create_jwt(cur_time, project_id, private_key_path):
     token = {
         'iat': cur_time,
         'exp': cur_time + datetime.timedelta(minutes=token_life),
-        'aud': projectID
+        'aud': project_id
     }
 
     with open(private_key_path, 'r') as f:
@@ -79,23 +79,20 @@ def main():
     key_file_path = args.key_file
     sensor_id = registry_id + "." + device_id
 
-    print("args: " + str(args))
-    print(create_jwt(datetime.datetime.utcnow(), args.project_id, args.key_file))
-
     _CLIENT_ID = 'projects/{}/locations/{}/registries/{}/devices/{}'.format(project_id, region, registry_id, device_id)
     _MQTT_TOPIC = '/devices/{}/events'.format(device_id)
 
     while True:
         client = mqtt.Client(client_id=_CLIENT_ID)
         current_time = datetime.datetime.utcnow()
-        client.username_pw_set(current_time, username='unused',
+        client.username_pw_set(username='unused',
                                password=create_jwt(current_time, project_id, key_file_path))
 
         client.on_connect = on_connect
         client.on_publish = on_publish
 
         client.tls_set(ca_certs=args.ca_certs)
-        client.connect(args.google_mqtt_url, args.google_mqtt_url)
+        client.connect(args.google_mqtt_url, args.google_mqtt_port)
 
         jwt_renewal_time = time() + ((token_life - 1) * 60)  # setting token to expire in 59 minutes
         client.loop_start()
@@ -119,4 +116,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-#    post_temp()
