@@ -7,11 +7,14 @@ from time import sleep, time
 import jwt
 import paho.mqtt.client as mqtt
 from w1thermsensor import W1ThermSensor
+from w1thermsensor import errors
 
 # Token life in minutes
 token_life = 60
 
 
+# From command line expected to get at least project_id, registry_id and device_id.
+# The default paths for key and cert paths need to be adjusted to fit your account rather than the ~/ syntax
 def parse_args():
     parser = argparse.ArgumentParser(description=("Common line arguments for PiTemp -app"))
 
@@ -27,6 +30,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# Authentication using JWT
 def create_jwt(cur_time, project_id, private_key_path):
     token = {
         'iat': cur_time,
@@ -52,6 +56,7 @@ def on_publish(unused_client, unused_userdata, unused_mid):
     print('on_publish')
 
 
+# Converting the payload to JSON
 def to_json(sensor_id, identifier, measurements, event_ts):
     record = {
         'sensor_id': sensor_id,
@@ -62,11 +67,16 @@ def to_json(sensor_id, identifier, measurements, event_ts):
     return json.dumps(record)
 
 
+# W1ThermSensor reading the temperatures from all available sensors
 def read_temperatures():
     temperatures = []
     for sensor in W1ThermSensor.get_available_sensors():
-        measures = {'sensor': sensor.id, 'temperature': sensor.get_temperature()}
-        temperatures.append(measures)
+        try:
+            measures = {'sensor': sensor.id, 'temperature': sensor.get_temperature()}
+            temperatures.append(measures)
+        except errors.SensorNotReadyError as e:
+            print("Skipping measure as sensor not ready")
+
     return temperatures
 
 
@@ -79,25 +89,30 @@ def main():
     key_file_path = args.key_file
     sensor_id = registry_id + "." + device_id
 
+    # This part is for IoT Core
     _CLIENT_ID = 'projects/{}/locations/{}/registries/{}/devices/{}'.format(project_id, region, registry_id, device_id)
     _MQTT_TOPIC = '/devices/{}/events'.format(device_id)
 
     while True:
+        # Create a MQTT client and authenticate with jwt
         client = mqtt.Client(client_id=_CLIENT_ID)
         current_time = datetime.datetime.utcnow()
         client.username_pw_set(username='unused',
                                password=create_jwt(current_time, project_id, key_file_path))
 
+        # What to do when connecting and publishing in addition to the obvious
         client.on_connect = on_connect
         client.on_publish = on_publish
 
+        # connection details for connecting the MQTT client to IoT Core
         client.tls_set(ca_certs=args.ca_certs)
         client.connect(args.google_mqtt_url, args.google_mqtt_port)
 
+        # Renew the token every 59 minutes
         jwt_renewal_time = time() + ((token_life - 1) * 60)  # setting token to expire in 59 minutes
         client.loop_start()
 
-        # loop for the lifetime of the token
+        # run this loop while the token is alive
         while time() < jwt_renewal_time:
             # read, publish, sleep, repeat
             try:
@@ -111,7 +126,7 @@ def main():
                 print("Something went wrong")
                 print(str(e))
                 raise
-        client.loop_stop()
+        client.loop_stop()  # stop loop and and start over
 
 
 if __name__ == '__main__':
